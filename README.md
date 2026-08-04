@@ -103,11 +103,75 @@ codex mcp get jushuitan
 codex mcp remove jushuitan
 ```
 
-## 4. 当前边界
+### 远程 HTTP 入口
+
+重新执行可编辑安装以生成 `jst-mcp-http` 命令：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\jst-mcp-http.exe
+```
+
+默认只监听 `127.0.0.1:8000`：
+
+```text
+健康检查：http://127.0.0.1:8000/health
+MCP 地址：http://127.0.0.1:8000/mcp
+```
+
+可通过环境变量覆盖：
+
+```dotenv
+JST_MCP_HOST=127.0.0.1
+JST_MCP_PORT=8000
+JST_MCP_PATH=/mcp
+```
+
+## 4. 手动 Docker 部署
+
+服务器部署目录只需要项目文件和服务器自己的 `.env`。不要上传本机 `.env`、Token 缓存或 SSH 私钥。
+
+在服务器复制模板并通过安全渠道填写聚水潭凭证：
+
+```bash
+cp .env.example .env
+docker compose config
+docker compose up -d --build
+docker compose ps
+docker compose logs --tail=100 jushuitan-mcp
+```
+
+Compose 默认把服务绑定到服务器回环地址：
+
+```dotenv
+JST_MCP_BIND_ADDRESS=127.0.0.1
+JST_MCP_PUBLIC_PORT=18090
+```
+
+部署后先在本机建立 SSH 隧道测试，不要直接开放公网端口：
+
+```powershell
+ssh -i "$env:USERPROFILE\.ssh\jst_mcp_deploy" `
+  -p SSH端口 `
+  -L 18090:127.0.0.1:18090 `
+  部署账户@服务器地址
+```
+
+隧道建立后，本机访问：
+
+```text
+http://127.0.0.1:18090/health
+http://127.0.0.1:18090/mcp
+```
+
+接入 Traefik、域名或部门用户前，必须先增加员工身份认证；不能仅把 `JST_MCP_BIND_ADDRESS` 改为 `0.0.0.0` 后直接暴露服务。
+
+## 5. 当前边界
 
 - 只实现新版 `app_key + app_secret` 协议。
 - `openweb.jushuitan.com` 是文档站；正式 API 请求默认发往 `https://openapi.jushuitan.com`。
 - 当前没有写接口。
+- HTTP MCP 当前没有员工身份认证，只允许回环地址或 SSH 隧道测试。
 - 采购入库查询用于获取实际入库单及其商品明细；采购单查询本身不能替代实际入库数据。
 - 普通商品资料同时支持按 SKU 和按款式两种查询方式。
 - 淘系、拼多多及隐私字段可能受到平台授权和奇门接口限制。

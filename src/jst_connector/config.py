@@ -20,6 +20,30 @@ def _default_token_cache_path() -> Path:
 
 
 @dataclass(frozen=True)
+class HttpSettings:
+    host: str = "127.0.0.1"
+    port: int = 8000
+    path: str = "/mcp"
+
+    @classmethod
+    def load(cls) -> "HttpSettings":
+        try:
+            port = int(os.getenv("JST_MCP_PORT", "8000"))
+        except ValueError as exc:
+            raise JstConfigError("JST_MCP_PORT 必须是整数。") from exc
+        if not 1 <= port <= 65535:
+            raise JstConfigError("JST_MCP_PORT 必须在 1 到 65535 之间。")
+        path = os.getenv("JST_MCP_PATH", "/mcp").strip()
+        if not path.startswith("/"):
+            raise JstConfigError("JST_MCP_PATH 必须以 / 开头。")
+        return cls(
+            host=os.getenv("JST_MCP_HOST", "127.0.0.1").strip(),
+            port=port,
+            path=path,
+        )
+
+
+@dataclass(frozen=True)
 class Settings:
     app_key: str
     app_secret: str

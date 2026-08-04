@@ -20,6 +20,7 @@ dev = ["pytest>=8,<10"]
 [project.scripts]
 jst = "jst_connector.cli:main"
 jst-mcp = "jst_connector.mcp_server:main"
+jst-mcp-http = "jst_connector.mcp_server:http_main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

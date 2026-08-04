@@ -3,15 +3,34 @@ from __future__ import annotations
 from typing import Any
 
 from mcp.server import MCPServer
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
+from starlette.applications import Starlette
 
 from .client import JstClient
-from .config import Settings
+from .config import HttpSettings, Settings
 
 
 mcp = MCPServer(
     "Jushuitan Read Only",
     instructions="只读查询聚水潭的库存、订单、采购单、采购入库和普通商品资料；不提供任何写操作。",
 )
+
+
+@mcp.custom_route("/health", methods=["GET"], include_in_schema=False)
+async def health_check(_: Request) -> Response:
+    return JSONResponse({"status": "ok", "service": "jushuitan-mcp"})
+
+
+def create_http_app(
+    *,
+    streamable_http_path: str = "/mcp",
+    host: str = "127.0.0.1",
+) -> Starlette:
+    return mcp.streamable_http_app(
+        streamable_http_path=streamable_http_path,
+        host=host,
+    )
 
 
 def _client() -> JstClient:
@@ -206,6 +225,16 @@ def jst_product_styles(
 
 def main() -> None:
     mcp.run(transport="stdio")
+
+
+def http_main() -> None:
+    settings = HttpSettings.load()
+    mcp.run(
+        transport="streamable-http",
+        host=settings.host,
+        port=settings.port,
+        streamable_http_path=settings.path,
+    )
 
 
 if __name__ == "__main__":
