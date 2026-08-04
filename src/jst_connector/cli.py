@@ -51,6 +51,50 @@ def build_parser() -> argparse.ArgumentParser:
     purchase.add_argument("--modified-end", help="YYYY-MM-DD HH:MM:SS")
     purchase.add_argument("--so-id", action="append", dest="so_ids", help="外部单号，可重复传入")
     purchase.add_argument("--po-id", action="append", dest="po_ids", help="采购单号，可重复传入")
+    purchase.add_argument("--is-lock")
+    purchase.add_argument("--status")
+    purchase.add_argument("--statuses", action="append", dest="statuss", help="状态，可重复传入")
+
+    purchase_inbound = subparsers.add_parser("purchase-inbound", help="查询采购入库单明细")
+    _add_page_args(purchase_inbound, 30, 50)
+    purchase_inbound.add_argument("--modified-begin", help="YYYY-MM-DD HH:MM:SS")
+    purchase_inbound.add_argument("--modified-end", help="YYYY-MM-DD HH:MM:SS")
+    purchase_inbound.add_argument("--po-id", type=int, action="append", dest="po_ids")
+    purchase_inbound.add_argument("--io-id", type=int, action="append", dest="io_ids")
+    purchase_inbound.add_argument("--status", action="append", dest="statuss")
+    purchase_inbound.add_argument("--so-id", action="append", dest="so_ids")
+    purchase_inbound.add_argument("--start-ts", type=int, help="增量查询时间戳")
+    purchase_inbound.add_argument("--is-get-total", action="store_true", default=None)
+    purchase_inbound.add_argument("--date-type", type=int, choices=(0, 2))
+    purchase_inbound.add_argument("--seller-id", type=int, action="append", dest="seller_ids")
+    purchase_inbound.add_argument("--owner-co-id", type=int)
+    purchase_inbound.add_argument("--wms-co-id", type=int)
+
+    product_skus = subparsers.add_parser("product-skus", help="按 SKU 查询普通商品资料")
+    _add_page_args(product_skus, 30, 100)
+    product_skus.add_argument("--modified-begin", help="YYYY-MM-DD HH:MM:SS")
+    product_skus.add_argument("--modified-end", help="YYYY-MM-DD HH:MM:SS")
+    product_skus.add_argument("--sku", action="append", dest="skus")
+    product_skus.add_argument("--exact-name", dest="exactly_name")
+    product_skus.add_argument("--name")
+    product_skus.add_argument("--brand", action="append", dest="brands")
+    product_skus.add_argument("--i-id", action="append", dest="i_ids")
+    product_skus.add_argument("--date-field", choices=("created", "modified"), default="modified")
+    product_skus.add_argument("--field", action="append", dest="fields")
+    product_skus.add_argument("--sku-code", action="append", dest="sku_codes")
+    product_skus.add_argument("--label", action="append", dest="labels")
+    product_skus.add_argument("--not-label", action="append", dest="not_labels")
+    product_skus.add_argument("--load-sku-bin", action="store_true", default=None)
+
+    product_styles = subparsers.add_parser("product-styles", help="按款式查询普通商品资料")
+    _add_page_args(product_styles, 30, 50)
+    product_styles.add_argument("--modified-begin", help="YYYY-MM-DD HH:MM:SS")
+    product_styles.add_argument("--modified-end", help="YYYY-MM-DD HH:MM:SS")
+    product_styles.add_argument("--i-id", action="append", dest="i_ids")
+    product_styles.add_argument("--only-item", action="store_true", default=None)
+    product_styles.add_argument("--date-field", choices=("created", "modified"), default="modified")
+    product_styles.add_argument("--item-field", action="append", dest="item_fields")
+    product_styles.add_argument("--sku-field", action="append", dest="sku_fields")
     return parser
 
 
@@ -83,13 +127,63 @@ def _execute(args: argparse.Namespace) -> dict[str, Any]:
                 status=args.status,
                 start_ts=args.start_ts,
             )
-        return client.purchase(
+        if args.command == "purchase":
+            return client.purchase(
+                page_index=args.page,
+                page_size=args.page_size,
+                modified_begin=args.modified_begin,
+                modified_end=args.modified_end,
+                so_ids=args.so_ids,
+                po_ids=args.po_ids,
+                is_lock=args.is_lock,
+                status=args.status,
+                statuss=args.statuss,
+            )
+        if args.command == "purchase-inbound":
+            return client.purchase_inbound(
+                page_index=args.page,
+                page_size=args.page_size,
+                modified_begin=args.modified_begin,
+                modified_end=args.modified_end,
+                po_ids=args.po_ids,
+                io_ids=args.io_ids,
+                statuss=args.statuss,
+                so_ids=args.so_ids,
+                start_ts=args.start_ts,
+                is_get_total=args.is_get_total,
+                date_type=args.date_type,
+                seller_ids=args.seller_ids,
+                owner_co_id=args.owner_co_id,
+                wms_co_id=args.wms_co_id,
+            )
+        if args.command == "product-skus":
+            return client.product_skus(
+                page_index=args.page,
+                page_size=args.page_size,
+                modified_begin=args.modified_begin,
+                modified_end=args.modified_end,
+                sku_ids=",".join(args.skus) if args.skus else None,
+                date_field=args.date_field,
+                flds=",".join(args.fields) if args.fields else None,
+                exactly_name=args.exactly_name,
+                name=args.name,
+                brand=args.brands,
+                i_ids=args.i_ids,
+                sku_codes=",".join(args.sku_codes) if args.sku_codes else None,
+                labels=args.labels,
+                not_labels=args.not_labels,
+                load_sku_bin=args.load_sku_bin,
+            )
+        return client.product_styles(
             page_index=args.page,
             page_size=args.page_size,
             modified_begin=args.modified_begin,
             modified_end=args.modified_end,
-            so_ids=args.so_ids,
-            po_ids=args.po_ids,
+            i_ids=args.i_ids,
+            only_item=args.only_item,
+            date_field=args.date_field,
+            item_flds=args.item_fields,
+            itemsku_flds=args.sku_fields,
         )
 
 

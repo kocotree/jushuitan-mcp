@@ -10,7 +10,7 @@ from .config import Settings
 
 mcp = MCPServer(
     "Jushuitan Read Only",
-    instructions="只读查询聚水潭的店铺、库存、订单和采购单；不提供任何写操作。",
+    instructions="只读查询聚水潭的店铺、库存、订单、采购单、采购入库和普通商品资料；不提供任何写操作。",
 )
 
 
@@ -87,6 +87,9 @@ def jst_purchase(
     modified_end: str | None = None,
     so_ids: list[str] | None = None,
     po_ids: list[str] | None = None,
+    is_lock: str | None = None,
+    status: str | None = None,
+    statuss: list[str] | None = None,
     page: int = 1,
     page_size: int = 30,
 ) -> dict[str, Any]:
@@ -99,6 +102,112 @@ def jst_purchase(
             modified_end=modified_end,
             so_ids=so_ids,
             po_ids=po_ids,
+            is_lock=is_lock,
+            status=status,
+            statuss=statuss,
+        )
+
+
+@mcp.tool()
+def jst_purchase_inbound(
+    modified_begin: str | None = None,
+    modified_end: str | None = None,
+    po_ids: list[int] | None = None,
+    io_ids: list[int] | None = None,
+    statuss: list[str] | None = None,
+    so_ids: list[str] | None = None,
+    start_ts: int | None = None,
+    is_get_total: bool | None = None,
+    date_type: int | None = None,
+    seller_ids: list[int] | None = None,
+    owner_co_id: int | None = None,
+    wms_co_id: int | None = None,
+    page: int = 1,
+    page_size: int = 30,
+) -> dict[str, Any]:
+    """只读查询采购入库单及商品明细。date_type=0 按修改时间，2 按入库时间。"""
+    with _client() as client:
+        return client.purchase_inbound(
+            page_index=page,
+            page_size=page_size,
+            modified_begin=modified_begin,
+            modified_end=modified_end,
+            po_ids=po_ids,
+            io_ids=io_ids,
+            statuss=statuss,
+            so_ids=so_ids,
+            start_ts=start_ts,
+            is_get_total=is_get_total,
+            date_type=date_type,
+            seller_ids=seller_ids,
+            owner_co_id=owner_co_id,
+            wms_co_id=wms_co_id,
+        )
+
+
+@mcp.tool()
+def jst_product_skus(
+    modified_begin: str | None = None,
+    modified_end: str | None = None,
+    sku_ids: str | None = None,
+    exactly_name: str | None = None,
+    name: str | None = None,
+    brand: list[str] | None = None,
+    i_ids: list[str] | None = None,
+    date_field: str = "modified",
+    flds: str | None = None,
+    sku_codes: str | None = None,
+    labels: list[str] | None = None,
+    not_labels: list[str] | None = None,
+    load_sku_bin: bool | None = None,
+    page: int = 1,
+    page_size: int = 30,
+) -> dict[str, Any]:
+    """只读按 SKU 查询普通商品资料，可按编码、名称、品牌、款式或标签筛选。"""
+    with _client() as client:
+        return client.product_skus(
+            page_index=page,
+            page_size=page_size,
+            modified_begin=modified_begin,
+            modified_end=modified_end,
+            sku_ids=sku_ids,
+            date_field=date_field,
+            flds=flds,
+            exactly_name=exactly_name,
+            name=name,
+            brand=brand,
+            i_ids=i_ids,
+            sku_codes=sku_codes,
+            labels=labels,
+            not_labels=not_labels,
+            load_sku_bin=load_sku_bin,
+        )
+
+
+@mcp.tool()
+def jst_product_styles(
+    modified_begin: str | None = None,
+    modified_end: str | None = None,
+    i_ids: list[str] | None = None,
+    only_item: bool | None = None,
+    date_field: str = "modified",
+    item_flds: list[str] | None = None,
+    itemsku_flds: list[str] | None = None,
+    page: int = 1,
+    page_size: int = 30,
+) -> dict[str, Any]:
+    """只读按款式查询普通商品资料，可返回款式及其 SKU 明细。"""
+    with _client() as client:
+        return client.product_styles(
+            page_index=page,
+            page_size=page_size,
+            modified_begin=modified_begin,
+            modified_end=modified_end,
+            i_ids=i_ids,
+            only_item=only_item,
+            date_field=date_field,
+            item_flds=item_flds,
+            itemsku_flds=itemsku_flds,
         )
 
 
