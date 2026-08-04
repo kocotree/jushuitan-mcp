@@ -16,7 +16,6 @@ from .token_cache import CachedToken, TokenCache
 
 
 READ_ONLY_PATHS = {
-    "shops": "/open/shops/query",
     "inventory": "/open/inventory/query",
     "orders": "/open/orders/single/query",
     "purchase": "/open/purchase/query",
@@ -91,19 +90,6 @@ class JstClient:
 
     def __exit__(self, *_: object) -> None:
         self.close()
-
-    def shops(
-        self,
-        *,
-        page_index: int = 1,
-        page_size: int = 100,
-        shop_ids: list[int] | None = None,
-    ) -> dict[str, Any]:
-        _validate_page(page_index, page_size, 100)
-        return self._business_request(
-            "shops",
-            {"page_index": page_index, "page_size": page_size, "shop_ids": shop_ids},
-        )
 
     def inventory(
         self,

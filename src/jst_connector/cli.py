@@ -20,10 +20,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="jst", description="聚水潭新版 OpenAPI 只读 CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    shops = subparsers.add_parser("shops", help="查询店铺")
-    _add_page_args(shops, 100, 100)
-    shops.add_argument("--shop-id", type=int, action="append", dest="shop_ids")
-
     inventory = subparsers.add_parser("inventory", help="查询库存")
     _add_page_args(inventory, 30, 100)
     inventory.add_argument("--wms-co-id", type=int)
@@ -100,8 +96,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _execute(args: argparse.Namespace) -> dict[str, Any]:
     with JstClient(Settings.load()) as client:
-        if args.command == "shops":
-            return client.shops(page_index=args.page, page_size=args.page_size, shop_ids=args.shop_ids)
         if args.command == "inventory":
             return client.inventory(
                 page_index=args.page,

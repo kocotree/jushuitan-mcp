@@ -2,7 +2,6 @@
 
 这个项目使用聚水潭新版开放平台的 `app_key + app_secret` 接入，只开放以下只读查询：
 
-- 店铺
 - 商品库存
 - 订单
 - 采购单管理
@@ -35,17 +34,15 @@ JST_ENDPOINT=https://openapi.jushuitan.com
 
 ## 2. 先验证 CLI
 
-店铺查询不需要业务筛选，适合作为第一次认证测试：
+使用一个已知商品编码验证认证和接口连接：
 
 ```powershell
-.\.venv\Scripts\jst.exe shops
+.\.venv\Scripts\jst.exe inventory --sku SKU001
 ```
 
 其他示例：
 
 ```powershell
-.\.venv\Scripts\jst.exe inventory --sku SKU001
-
 .\.venv\Scripts\jst.exe orders `
   --modified-begin "2026-08-01 00:00:00" `
   --modified-end "2026-08-02 00:00:00"
@@ -78,7 +75,6 @@ JST_ENDPOINT=https://openapi.jushuitan.com
 
 这是 STDIO MCP Server，提供以下工具：
 
-- `jst_shops`
 - `jst_inventory`
 - `jst_orders`
 - `jst_purchase`

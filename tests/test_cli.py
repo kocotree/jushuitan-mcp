@@ -28,6 +28,11 @@ class RecordingClient:
         return call
 
 
+def test_cli_does_not_expose_shops_command() -> None:
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["shops"])
+
+
 @pytest.mark.parametrize(
     ("argv", "expected_name", "expected_values"),
     [

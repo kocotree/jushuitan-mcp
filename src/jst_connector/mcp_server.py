@@ -10,19 +10,12 @@ from .config import Settings
 
 mcp = MCPServer(
     "Jushuitan Read Only",
-    instructions="只读查询聚水潭的店铺、库存、订单、采购单、采购入库和普通商品资料；不提供任何写操作。",
+    instructions="只读查询聚水潭的库存、订单、采购单、采购入库和普通商品资料；不提供任何写操作。",
 )
 
 
 def _client() -> JstClient:
     return JstClient(Settings.load())
-
-
-@mcp.tool()
-def jst_shops(page: int = 1, page_size: int = 100, shop_ids: list[int] | None = None) -> dict[str, Any]:
-    """只读查询聚水潭店铺列表。"""
-    with _client() as client:
-        return client.shops(page_index=page, page_size=page_size, shop_ids=shop_ids)
 
 
 @mcp.tool()

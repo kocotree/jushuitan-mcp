@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from urllib.parse import parse_qs
 
@@ -21,7 +22,46 @@ def _settings(tmp_path: Path) -> Settings:
     )
 
 
-def test_shops_initializes_token_signs_request_and_reuses_cache(tmp_path: Path) -> None:
+BusinessRequest = tuple[str, dict[str, object]]
+
+
+@pytest.fixture
+def recording_client(tmp_path: Path) -> Iterator[tuple[JstClient, list[BusinessRequest]]]:
+    business_requests: list[BusinessRequest] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        form = {key: values[0] for key, values in parse_qs(request.content.decode()).items()}
+        if request.url.path == "/openWeb/auth/getInitToken":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "access_token": "access-value",
+                        "refresh_token": "refresh-value",
+                        "expires_in": 864000,
+                    },
+                },
+            )
+        business_requests.append((request.url.path, json.loads(form["biz"])))
+        return httpx.Response(200, json={"code": 0, "data": {"datas": []}})
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    yield JstClient(_settings(tmp_path), http=http), business_requests
+    http.close()
+
+
+@pytest.fixture
+def validation_client(tmp_path: Path) -> Iterator[JstClient]:
+    def unexpected_request(_: httpx.Request) -> httpx.Response:
+        raise AssertionError("validation should fail before making an HTTP request")
+
+    http = httpx.Client(transport=httpx.MockTransport(unexpected_request))
+    yield JstClient(_settings(tmp_path), http=http)
+    http.close()
+
+
+def test_inventory_initializes_token_signs_request_and_reuses_cache(tmp_path: Path) -> None:
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -43,56 +83,43 @@ def test_shops_initializes_token_signs_request_and_reuses_cache(tmp_path: Path) 
                     },
                 },
             )
-        assert request.url.path == "/open/shops/query"
+        assert request.url.path == "/open/inventory/query"
         assert form["access_token"] == "access-value"
-        assert json.loads(form["biz"]) == {"page_index": 1, "page_size": 100}
-        return httpx.Response(200, json={"code": 0, "shops": [{"shop_id": 1}]})
+        assert json.loads(form["biz"]) == {
+            "page_index": 1,
+            "page_size": 30,
+            "sku_ids": "SKU001",
+        }
+        return httpx.Response(200, json={"code": 0, "data": {"datas": []}})
 
     http = httpx.Client(transport=httpx.MockTransport(handler))
     client = JstClient(_settings(tmp_path), http=http)
-    assert client.shops()["shops"][0]["shop_id"] == 1
-    assert client.shops()["shops"][0]["shop_id"] == 1
+    assert client.inventory(sku_ids="SKU001")["code"] == 0
+    assert client.inventory(sku_ids="SKU001")["code"] == 0
     assert [request.url.path for request in requests] == [
         "/openWeb/auth/getInitToken",
-        "/open/shops/query",
-        "/open/shops/query",
+        "/open/inventory/query",
+        "/open/inventory/query",
     ]
 
 
-def test_inventory_requires_a_filter(tmp_path: Path) -> None:
-    client = JstClient(_settings(tmp_path), http=httpx.Client(transport=httpx.MockTransport(lambda _: None)))
+def test_client_does_not_expose_shops_query() -> None:
+    assert not hasattr(JstClient, "shops")
+
+
+def test_inventory_requires_a_filter(validation_client: JstClient) -> None:
     try:
-        client.inventory()
+        validation_client.inventory()
     except ValueError as exc:
         assert "至少提供" in str(exc)
     else:
         raise AssertionError("inventory() should reject an unbounded query")
 
 
-def test_purchase_inbound_queries_official_read_only_endpoint(tmp_path: Path) -> None:
-    business_requests: list[tuple[str, dict[str, object]]] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        form = {key: values[0] for key, values in parse_qs(request.content.decode()).items()}
-        if request.url.path == "/openWeb/auth/getInitToken":
-            return httpx.Response(
-                200,
-                json={
-                    "code": 0,
-                    "data": {
-                        "access_token": "access-value",
-                        "refresh_token": "refresh-value",
-                        "expires_in": 864000,
-                    },
-                },
-            )
-        business_requests.append((request.url.path, json.loads(form["biz"])))
-        return httpx.Response(200, json={"code": 0, "data": {"datas": []}})
-
-    client = JstClient(
-        _settings(tmp_path),
-        http=httpx.Client(transport=httpx.MockTransport(handler)),
-    )
+def test_purchase_inbound_queries_official_read_only_endpoint(
+    recording_client: tuple[JstClient, list[BusinessRequest]],
+) -> None:
+    client, business_requests = recording_client
     client.purchase_inbound(
         modified_begin="2026-08-04 00:00:00",
         modified_end="2026-08-04 23:59:59",
@@ -128,30 +155,10 @@ def test_purchase_inbound_queries_official_read_only_endpoint(tmp_path: Path) ->
     ]
 
 
-def test_product_skus_queries_official_read_only_endpoint(tmp_path: Path) -> None:
-    business_requests: list[tuple[str, dict[str, object]]] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        form = {key: values[0] for key, values in parse_qs(request.content.decode()).items()}
-        if request.url.path == "/openWeb/auth/getInitToken":
-            return httpx.Response(
-                200,
-                json={
-                    "code": 0,
-                    "data": {
-                        "access_token": "access-value",
-                        "refresh_token": "refresh-value",
-                        "expires_in": 864000,
-                    },
-                },
-            )
-        business_requests.append((request.url.path, json.loads(form["biz"])))
-        return httpx.Response(200, json={"code": 0, "data": {"datas": []}})
-
-    client = JstClient(
-        _settings(tmp_path),
-        http=httpx.Client(transport=httpx.MockTransport(handler)),
-    )
+def test_product_skus_queries_official_read_only_endpoint(
+    recording_client: tuple[JstClient, list[BusinessRequest]],
+) -> None:
+    client, business_requests = recording_client
     client.product_skus(
         sku_ids="SKU001,SKU002",
         date_field="modified",
@@ -173,33 +180,13 @@ def test_product_skus_queries_official_read_only_endpoint(tmp_path: Path) -> Non
     ]
 
 
-def test_purchase_inbound_start_ts_uses_incremental_mode(tmp_path: Path) -> None:
-    business_biz: list[dict[str, object]] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        form = {key: values[0] for key, values in parse_qs(request.content.decode()).items()}
-        if request.url.path == "/openWeb/auth/getInitToken":
-            return httpx.Response(
-                200,
-                json={
-                    "code": 0,
-                    "data": {
-                        "access_token": "access-value",
-                        "refresh_token": "refresh-value",
-                        "expires_in": 864000,
-                    },
-                },
-            )
-        business_biz.append(json.loads(form["biz"]))
-        return httpx.Response(200, json={"code": 0, "data": {"datas": []}})
-
-    client = JstClient(
-        _settings(tmp_path),
-        http=httpx.Client(transport=httpx.MockTransport(handler)),
-    )
+def test_purchase_inbound_start_ts_uses_incremental_mode(
+    recording_client: tuple[JstClient, list[BusinessRequest]],
+) -> None:
+    client, business_requests = recording_client
     client.purchase_inbound(start_ts=123456)
 
-    assert business_biz == [
+    assert [biz for _, biz in business_requests] == [
         {
             "page_index": 1,
             "page_size": 30,
@@ -209,14 +196,11 @@ def test_purchase_inbound_start_ts_uses_incremental_mode(tmp_path: Path) -> None
     ]
 
 
-def test_purchase_inbound_rejects_start_ts_with_other_filters(tmp_path: Path) -> None:
-    client = JstClient(
-        _settings(tmp_path),
-        http=httpx.Client(transport=httpx.MockTransport(lambda _: None)),
-    )
-
+def test_purchase_inbound_rejects_start_ts_with_other_filters(
+    validation_client: JstClient,
+) -> None:
     try:
-        client.purchase_inbound(
+        validation_client.purchase_inbound(
             start_ts=123456,
             modified_begin="2026-08-04 00:00:00",
             modified_end="2026-08-04 01:00:00",
@@ -227,14 +211,11 @@ def test_purchase_inbound_rejects_start_ts_with_other_filters(tmp_path: Path) ->
         raise AssertionError("start_ts incremental mode must reject other filters")
 
 
-def test_purchase_inbound_rejects_total_count_in_incremental_mode(tmp_path: Path) -> None:
-    client = JstClient(
-        _settings(tmp_path),
-        http=httpx.Client(transport=httpx.MockTransport(lambda _: None)),
-    )
-
+def test_purchase_inbound_rejects_total_count_in_incremental_mode(
+    validation_client: JstClient,
+) -> None:
     with pytest.raises(ValueError, match="is_get_total"):
-        client.purchase_inbound(start_ts=123456, is_get_total=True)
+        validation_client.purchase_inbound(start_ts=123456, is_get_total=True)
 
 
 @pytest.mark.parametrize(
@@ -245,16 +226,11 @@ def test_purchase_inbound_rejects_total_count_in_incremental_mode(tmp_path: Path
     ],
 )
 def test_purchase_rejects_unsupported_statuses(
-    tmp_path: Path,
+    validation_client: JstClient,
     filters: dict[str, object],
 ) -> None:
-    client = JstClient(
-        _settings(tmp_path),
-        http=httpx.Client(transport=httpx.MockTransport(lambda _: None)),
-    )
-
     with pytest.raises(ValueError, match="status"):
-        client.purchase(po_ids=["PO001"], **filters)
+        validation_client.purchase(po_ids=["PO001"], **filters)
 
 
 @pytest.mark.parametrize(
@@ -262,15 +238,10 @@ def test_purchase_rejects_unsupported_statuses(
     ["inventory", "purchase", "purchase_inbound", "product_skus", "product_styles"],
 )
 def test_core_queries_reject_time_ranges_over_seven_days(
-    tmp_path: Path,
+    validation_client: JstClient,
     method_name: str,
 ) -> None:
-    client = JstClient(
-        _settings(tmp_path),
-        http=httpx.Client(transport=httpx.MockTransport(lambda _: None)),
-    )
-
-    method = getattr(client, method_name)
+    method = getattr(validation_client, method_name)
     with pytest.raises(ValueError, match="七天"):
         method(
             modified_begin="2026-08-01 00:00:00",
@@ -289,18 +260,13 @@ def test_core_queries_reject_time_ranges_over_seven_days(
     ],
 )
 def test_core_queries_enforce_official_page_size_limits(
-    tmp_path: Path,
+    validation_client: JstClient,
     method_name: str,
     max_size: int,
     filters: dict[str, object],
 ) -> None:
-    client = JstClient(
-        _settings(tmp_path),
-        http=httpx.Client(transport=httpx.MockTransport(lambda _: None)),
-    )
-
     with pytest.raises(ValueError, match="page_size"):
-        getattr(client, method_name)(page_size=max_size + 1, **filters)
+        getattr(validation_client, method_name)(page_size=max_size + 1, **filters)
 
 
 @pytest.mark.parametrize(
@@ -314,17 +280,12 @@ def test_core_queries_enforce_official_page_size_limits(
     ],
 )
 def test_core_queries_enforce_official_identifier_limits(
-    tmp_path: Path,
+    validation_client: JstClient,
     method_name: str,
     filters: dict[str, object],
 ) -> None:
-    client = JstClient(
-        _settings(tmp_path),
-        http=httpx.Client(transport=httpx.MockTransport(lambda _: None)),
-    )
-
     with pytest.raises(ValueError, match="最多"):
-        getattr(client, method_name)(**filters)
+        getattr(validation_client, method_name)(**filters)
 
 
 @pytest.mark.parametrize(
@@ -336,44 +297,19 @@ def test_core_queries_enforce_official_identifier_limits(
     ],
 )
 def test_core_queries_reject_unsupported_date_modes(
-    tmp_path: Path,
+    validation_client: JstClient,
     method_name: str,
     filters: dict[str, object],
     message: str,
 ) -> None:
-    client = JstClient(
-        _settings(tmp_path),
-        http=httpx.Client(transport=httpx.MockTransport(lambda _: None)),
-    )
-
     with pytest.raises(ValueError, match=message):
-        getattr(client, method_name)(**filters)
+        getattr(validation_client, method_name)(**filters)
 
 
-def test_product_styles_queries_official_read_only_endpoint(tmp_path: Path) -> None:
-    business_requests: list[tuple[str, dict[str, object]]] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        form = {key: values[0] for key, values in parse_qs(request.content.decode()).items()}
-        if request.url.path == "/openWeb/auth/getInitToken":
-            return httpx.Response(
-                200,
-                json={
-                    "code": 0,
-                    "data": {
-                        "access_token": "access-value",
-                        "refresh_token": "refresh-value",
-                        "expires_in": 864000,
-                    },
-                },
-            )
-        business_requests.append((request.url.path, json.loads(form["biz"])))
-        return httpx.Response(200, json={"code": 0, "data": {"datas": []}})
-
-    client = JstClient(
-        _settings(tmp_path),
-        http=httpx.Client(transport=httpx.MockTransport(handler)),
-    )
+def test_product_styles_queries_official_read_only_endpoint(
+    recording_client: tuple[JstClient, list[BusinessRequest]],
+) -> None:
+    client, business_requests = recording_client
     client.product_styles(
         i_ids=["STYLE001", "STYLE002"],
         only_item=False,
@@ -395,30 +331,10 @@ def test_product_styles_queries_official_read_only_endpoint(tmp_path: Path) -> N
     ]
 
 
-def test_purchase_passes_official_status_filters(tmp_path: Path) -> None:
-    business_biz: list[dict[str, object]] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        form = {key: values[0] for key, values in parse_qs(request.content.decode()).items()}
-        if request.url.path == "/openWeb/auth/getInitToken":
-            return httpx.Response(
-                200,
-                json={
-                    "code": 0,
-                    "data": {
-                        "access_token": "access-value",
-                        "refresh_token": "refresh-value",
-                        "expires_in": 864000,
-                    },
-                },
-            )
-        business_biz.append(json.loads(form["biz"]))
-        return httpx.Response(200, json={"code": 0, "data": {"datas": []}})
-
-    client = JstClient(
-        _settings(tmp_path),
-        http=httpx.Client(transport=httpx.MockTransport(handler)),
-    )
+def test_purchase_passes_official_status_filters(
+    recording_client: tuple[JstClient, list[BusinessRequest]],
+) -> None:
+    client, business_requests = recording_client
     client.purchase(
         po_ids=["PO001"],
         is_lock="1",
@@ -426,7 +342,7 @@ def test_purchase_passes_official_status_filters(tmp_path: Path) -> None:
         statuss=["Confirmed", "WaitDeliver"],
     )
 
-    assert business_biz == [
+    assert [biz for _, biz in business_requests] == [
         {
             "page_index": 1,
             "page_size": 30,
@@ -438,30 +354,10 @@ def test_purchase_passes_official_status_filters(tmp_path: Path) -> None:
     ]
 
 
-def test_product_skus_passes_official_product_filters(tmp_path: Path) -> None:
-    business_biz: list[dict[str, object]] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        form = {key: values[0] for key, values in parse_qs(request.content.decode()).items()}
-        if request.url.path == "/openWeb/auth/getInitToken":
-            return httpx.Response(
-                200,
-                json={
-                    "code": 0,
-                    "data": {
-                        "access_token": "access-value",
-                        "refresh_token": "refresh-value",
-                        "expires_in": 864000,
-                    },
-                },
-            )
-        business_biz.append(json.loads(form["biz"]))
-        return httpx.Response(200, json={"code": 0, "data": {"datas": []}})
-
-    client = JstClient(
-        _settings(tmp_path),
-        http=httpx.Client(transport=httpx.MockTransport(handler)),
-    )
+def test_product_skus_passes_official_product_filters(
+    recording_client: tuple[JstClient, list[BusinessRequest]],
+) -> None:
+    client, business_requests = recording_client
     client.product_skus(
         exactly_name="椰椰小岛两栖泳衣三件套",
         name="泳衣",
@@ -473,7 +369,7 @@ def test_product_skus_passes_official_product_filters(tmp_path: Path) -> None:
         load_sku_bin=True,
     )
 
-    assert business_biz == [
+    assert [biz for _, biz in business_requests] == [
         {
             "page_index": 1,
             "page_size": 30,
@@ -490,37 +386,17 @@ def test_product_skus_passes_official_product_filters(tmp_path: Path) -> None:
     ]
 
 
-def test_product_styles_passes_requested_response_fields(tmp_path: Path) -> None:
-    business_biz: list[dict[str, object]] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        form = {key: values[0] for key, values in parse_qs(request.content.decode()).items()}
-        if request.url.path == "/openWeb/auth/getInitToken":
-            return httpx.Response(
-                200,
-                json={
-                    "code": 0,
-                    "data": {
-                        "access_token": "access-value",
-                        "refresh_token": "refresh-value",
-                        "expires_in": 864000,
-                    },
-                },
-            )
-        business_biz.append(json.loads(form["biz"]))
-        return httpx.Response(200, json={"code": 0, "data": {"datas": []}})
-
-    client = JstClient(
-        _settings(tmp_path),
-        http=httpx.Client(transport=httpx.MockTransport(handler)),
-    )
+def test_product_styles_passes_requested_response_fields(
+    recording_client: tuple[JstClient, list[BusinessRequest]],
+) -> None:
+    client, business_requests = recording_client
     client.product_styles(
         i_ids=["STYLE001"],
         item_flds=["brand", "category"],
         itemsku_flds=["purchase_price", "pics"],
     )
 
-    assert business_biz == [
+    assert [biz for _, biz in business_requests] == [
         {
             "page_index": 1,
             "page_size": 30,
