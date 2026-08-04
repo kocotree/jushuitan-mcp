@@ -1,0 +1,100 @@
+# 聚水潭只读 CLI 与 MCP
+
+这个项目使用聚水潭新版开放平台的 `app_key + app_secret` 接入，只开放四类只读查询：
+
+- 店铺
+- 库存
+- 订单
+- 采购单
+
+不会提供发货、取消订单、修改库存等写操作。
+
+## 1. 安装
+
+在 PowerShell 中运行：
+
+```powershell
+cd D:\kk\jushuitan_review
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+Copy-Item .env.example .env
+```
+
+编辑 `.env`，只填写你自己的值：
+
+```dotenv
+JST_APP_KEY=你的应用Key
+JST_APP_SECRET=你的应用Secret
+JST_ENDPOINT=https://openapi.jushuitan.com
+```
+
+`.env` 已被 `.gitignore` 排除。不要把真实 Key、Secret 或 Token 发到聊天、提交到 Git，或写进 MCP 配置文件。
+
+## 2. 先验证 CLI
+
+店铺查询不需要业务筛选，适合作为第一次认证测试：
+
+```powershell
+.\.venv\Scripts\jst.exe shops
+```
+
+其他示例：
+
+```powershell
+.\.venv\Scripts\jst.exe inventory --sku SKU001
+
+.\.venv\Scripts\jst.exe orders `
+  --modified-begin "2026-08-01 00:00:00" `
+  --modified-end "2026-08-02 00:00:00"
+
+.\.venv\Scripts\jst.exe purchase --po-id PO12345
+```
+
+时间范围按聚水潭接口要求最长七天。订单和库存的大批量同步应使用 `ts/start_ts` 防止翻页期间数据变化造成漏单。
+
+程序会自动获取、缓存和刷新 Token。默认缓存位置为：
+
+```text
+%LOCALAPPDATA%\jst-connector\token.json
+```
+
+## 3. 运行 MCP
+
+```powershell
+.\.venv\Scripts\jst-mcp.exe
+```
+
+这是 STDIO MCP Server，提供以下工具：
+
+- `jst_shops`
+- `jst_inventory`
+- `jst_orders`
+- `jst_purchase`
+
+MCP 客户端应直接启动 `D:\kk\jushuitan_review\.venv\Scripts\python.exe`，参数为：
+
+```text
+-m jst_connector.mcp_server
+```
+
+程序会按安装位置读取 `D:\kk\jushuitan_review\.env`，不要求把密钥复制进 MCP 客户端配置。
+
+本机 Codex 可运行：
+
+```powershell
+codex mcp add jushuitan -- "D:\kk\jushuitan_review\.venv\Scripts\python.exe" -m jst_connector.mcp_server
+codex mcp get jushuitan
+```
+
+当前电脑已经添加了名为 `jushuitan` 的全局 MCP 配置。如需移除：
+
+```powershell
+codex mcp remove jushuitan
+```
+
+## 4. 当前边界
+
+- 只实现新版 `app_key + app_secret` 协议。
+- 当前没有写接口。
+- 没有凭证时可以完成单元测试和 MCP 工具发现，但不能验证聚水潭真实返回字段。
+- 淘系、拼多多及隐私字段可能受到平台授权和奇门接口限制。
