@@ -105,7 +105,7 @@ codex mcp remove jushuitan
 
 ### 远程 HTTP 入口
 
-重新执行可编辑安装以生成 `jst-mcp-http` 命令：
+远程 HTTP 入口已启用标准 MCP OAuth，并使用飞书完成员工登录。STDIO 入口不受影响。重新执行可编辑安装以生成 `jst-mcp-http` 命令：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
@@ -125,7 +125,17 @@ MCP 地址：http://127.0.0.1:8000/mcp
 JST_MCP_HOST=127.0.0.1
 JST_MCP_PORT=8000
 JST_MCP_PATH=/mcp
+JST_MCP_PUBLIC_URL=https://jushuitan-mcp.kktree.cn
+JST_MCP_OAUTH_DB_PATH=/data/oauth.db
+FEISHU_APP_ID=飞书应用的App ID
+FEISHU_APP_SECRET=飞书应用的App Secret
+FEISHU_ALLOWED_TENANT_KEY=公司tenant_key
+FEISHU_REDIRECT_URI=https://jushuitan-mcp.kktree.cn/oauth/feishu/callback
 ```
+
+`FEISHU_ALLOWED_TENANT_KEY` 是公司的租户标识，不是部门 ID。部门限制继续由飞书应用的“可用范围”负责；服务端会额外拒绝 tenant_key 不匹配的其他企业账号。OAuth 客户端、授权码和 MCP token 保存在 SQLite 中，其中授权码和 token 只保存哈希值。
+
+单次 MCP access token 有效 1 小时；refresh token 可以轮换，但同一登录会话最多持续 12 小时，之后必须重新完成飞书登录，以便应用可用范围的人员变更及时生效。
 
 ## 4. 手动 Docker 部署
 
@@ -164,14 +174,14 @@ http://127.0.0.1:18090/health
 http://127.0.0.1:18090/mcp
 ```
 
-接入 Traefik、域名或部门用户前，必须先增加员工身份认证；不能仅把 `JST_MCP_BIND_ADDRESS` 改为 `0.0.0.0` 后直接暴露服务。
+Traefik 只把域名请求转发到该服务；`/mcp` 会要求 Bearer token，未登录客户端会通过 OAuth 元数据发现飞书登录入口。
 
 ## 5. 当前边界
 
 - 只实现新版 `app_key + app_secret` 协议。
 - `openweb.jushuitan.com` 是文档站；正式 API 请求默认发往 `https://openapi.jushuitan.com`。
 - 当前没有写接口。
-- HTTP MCP 当前没有员工身份认证，只允许回环地址或 SSH 隧道测试。
+- HTTP MCP 使用飞书登录、公司 tenant_key 校验和飞书应用可用范围限制；仅部门成员可完成登录。
 - 采购入库查询用于获取实际入库单及其商品明细；采购单查询本身不能替代实际入库数据。
 - 普通商品资料同时支持按 SKU 和按款式两种查询方式。
 - 淘系、拼多多及隐私字段可能受到平台授权和奇门接口限制。

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 from mcp.server import MCPServer
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -9,6 +10,7 @@ from starlette.applications import Starlette
 
 from .client import JstClient
 from .config import HttpSettings, Settings
+from .oauth import FeishuOAuthProvider, OAuthSettings
 
 
 mcp = MCPServer(
@@ -26,8 +28,15 @@ def create_http_app(
     *,
     streamable_http_path: str = "/mcp",
     host: str = "127.0.0.1",
+    oauth_settings: OAuthSettings | None = None,
+    oauth_http_transport: httpx.AsyncBaseTransport | None = None,
 ) -> Starlette:
-    return mcp.streamable_http_app(
+    server = (
+        _create_protected_server(oauth_settings, oauth_http_transport)
+        if oauth_settings
+        else mcp
+    )
+    return server.streamable_http_app(
         streamable_http_path=streamable_http_path,
         host=host,
     )
@@ -223,13 +232,47 @@ def jst_product_styles(
         )
 
 
+def _create_protected_server(
+    oauth_settings: OAuthSettings,
+    oauth_http_transport: httpx.AsyncBaseTransport | None = None,
+) -> MCPServer:
+    provider = FeishuOAuthProvider(
+        oauth_settings,
+        http_transport=oauth_http_transport,
+    )
+    server = MCPServer(
+        "Jushuitan Read Only",
+        instructions=mcp.instructions,
+        auth_server_provider=provider,
+        auth=oauth_settings.to_mcp_auth_settings(),
+    )
+    server.custom_route("/health", methods=["GET"], include_in_schema=False)(health_check)
+    server.custom_route(
+        "/oauth/feishu/callback",
+        methods=["GET"],
+        include_in_schema=False,
+    )(provider.handle_feishu_callback)
+    for tool_function in (
+        jst_inventory,
+        jst_orders,
+        jst_purchase,
+        jst_purchase_inbound,
+        jst_product_skus,
+        jst_product_styles,
+    ):
+        server.tool()(tool_function)
+    return server
+
+
 def main() -> None:
     mcp.run(transport="stdio")
 
 
 def http_main() -> None:
     settings = HttpSettings.load()
-    mcp.run(
+    oauth_settings = OAuthSettings.load()
+    protected_server = _create_protected_server(oauth_settings)
+    protected_server.run(
         transport="streamable-http",
         host=settings.host,
         port=settings.port,
