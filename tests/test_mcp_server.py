@@ -7,6 +7,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import httpx
+import uvicorn
 from starlette.testclient import TestClient
 
 from jst_connector import mcp_server
@@ -334,12 +335,14 @@ def test_http_main_runs_protected_streamable_http_from_environment(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    calls: list[tuple[str, dict[str, Any]]] = []
+    app_calls: list[dict[str, Any]] = []
+    run_calls: list[tuple[object, dict[str, Any]]] = []
     oauth_settings = _oauth_settings(tmp_path)
 
     class FakeProtectedServer:
-        def run(self, transport: str, **kwargs: Any) -> None:
-            calls.append((transport, kwargs))
+        def streamable_http_app(self, **kwargs: Any) -> object:
+            app_calls.append(kwargs)
+            return "protected-app"
 
     monkeypatch.setenv("JST_MCP_HOST", "0.0.0.0")
     monkeypatch.setenv("JST_MCP_PORT", "8080")
@@ -354,16 +357,27 @@ def test_http_main_runs_protected_streamable_http_from_environment(
         "_create_protected_server",
         lambda settings: FakeProtectedServer(),
     )
+    monkeypatch.setattr(
+        uvicorn,
+        "run",
+        lambda app, **kwargs: run_calls.append((app, kwargs)),
+    )
 
     mcp_server.http_main()
 
-    assert calls == [
+    assert app_calls == [
+        {
+            "host": "0.0.0.0",
+            "streamable_http_path": "/internal/mcp",
+        }
+    ]
+    assert run_calls == [
         (
-            "streamable-http",
+            "protected-app",
             {
                 "host": "0.0.0.0",
                 "port": 8080,
-                "streamable_http_path": "/internal/mcp",
+                "access_log": False,
             },
         )
     ]

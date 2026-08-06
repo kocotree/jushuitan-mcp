@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
+import uvicorn
 from mcp.server import MCPServer
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -272,11 +273,15 @@ def http_main() -> None:
     settings = HttpSettings.load()
     oauth_settings = OAuthSettings.load()
     protected_server = _create_protected_server(oauth_settings)
-    protected_server.run(
-        transport="streamable-http",
+    app = protected_server.streamable_http_app(
+        host=settings.host,
+        streamable_http_path=settings.path,
+    )
+    uvicorn.run(
+        app,
         host=settings.host,
         port=settings.port,
-        streamable_http_path=settings.path,
+        access_log=False,
     )
 
 
