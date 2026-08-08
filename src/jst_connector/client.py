@@ -362,8 +362,24 @@ class JstClient:
         if name not in READ_ONLY_PATHS:
             raise ValueError(f"不允许的接口：{name}")
         biz = json.dumps(_without_none(params), ensure_ascii=False, separators=(",", ":"))
+        access_token = self._get_access_token()
+        try:
+            return self._post(
+                READ_ONLY_PATHS[name],
+                self._business_form(biz, access_token),
+            )
+        except JstApiError as exc:
+            if str(exc.code) != "100":
+                raise
+
+        return self._post(
+            READ_ONLY_PATHS[name],
+            self._business_form(biz, self._renew_access_token()),
+        )
+
+    def _business_form(self, biz: str, access_token: str) -> dict[str, str]:
         form: dict[str, str] = {
-            "access_token": self._get_access_token(),
+            "access_token": access_token,
             "app_key": self.settings.app_key,
             "biz": biz,
             "charset": "utf-8",
@@ -371,18 +387,34 @@ class JstClient:
             "version": "2",
         }
         form["sign"] = sign_params(form, self.settings.app_secret)
-        return self._post(READ_ONLY_PATHS[name], form)
+        return form
+
+    def _renew_access_token(self) -> str:
+        cached = self._cache.load(self.settings.app_key)
+        if cached and cached.refresh_token:
+            token_data = self._refresh_or_init(cached.refresh_token)
+        else:
+            token_data = self._init_token()
+        return self._save_token_data(token_data).access_token
 
     def _get_access_token(self) -> str:
         cached = self._cache.load(self.settings.app_key)
         if cached and cached.access_is_valid():
             return cached.access_token
         if cached and cached.refresh_is_valid():
-            token_data = self._refresh_token(cached.refresh_token)
+            token_data = self._refresh_or_init(cached.refresh_token)
         else:
             token_data = self._init_token()
         saved = self._save_token_data(token_data)
         return saved.access_token
+
+    def _refresh_or_init(self, refresh_token: str) -> dict[str, Any]:
+        try:
+            return self._refresh_token(refresh_token)
+        except JstApiError as exc:
+            if str(exc.code) != "140":
+                raise
+            return self._init_token()
 
     def _init_token(self) -> dict[str, Any]:
         form: dict[str, str] = {
@@ -452,5 +484,5 @@ class JstClient:
         code = payload.get("code")
         if code not in (None, 0, "0") or payload.get("issuccess") is False:
             message = payload.get("msg") or payload.get("message") or "未知错误"
-            raise JstApiError(f"聚水潭接口错误 code={code}: {message}")
+            raise JstApiError(f"聚水潭接口错误 code={code}: {message}", code=code)
         return payload

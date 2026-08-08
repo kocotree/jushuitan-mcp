@@ -8,3 +8,7 @@ class JstConfigError(JstError):
 
 class JstApiError(JstError):
     """聚水潭 OpenAPI 返回错误。"""
+
+    def __init__(self, message: str, *, code: int | str | None = None):
+        super().__init__(message)
+        self.code = code

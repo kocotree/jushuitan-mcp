@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from urllib.parse import parse_qs
@@ -99,6 +100,164 @@ def test_inventory_initializes_token_signs_request_and_reuses_cache(tmp_path: Pa
     assert [request.url.path for request in requests] == [
         "/openWeb/auth/getInitToken",
         "/open/inventory/query",
+        "/open/inventory/query",
+    ]
+
+
+def test_inventory_recovers_from_rejected_access_token_using_refresh(
+    tmp_path: Path,
+) -> None:
+    business_tokens: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        form = {key: values[0] for key, values in parse_qs(request.content.decode()).items()}
+        if request.url.path == "/openWeb/auth/getInitToken":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "access_token": "stale-access",
+                        "refresh_token": "stale-refresh",
+                        "expires_in": 2592000,
+                    },
+                },
+            )
+        if request.url.path == "/openWeb/auth/refreshToken":
+            assert form["refresh_token"] == "stale-refresh"
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "access_token": "fresh-access",
+                        "refresh_token": "fresh-refresh",
+                        "expires_in": 2592000,
+                    },
+                },
+            )
+
+        assert request.url.path == "/open/inventory/query"
+        business_tokens.append(form["access_token"])
+        if form["access_token"] == "stale-access":
+            return httpx.Response(
+                200,
+                json={"code": 100, "msg": "access_token invalid or expired"},
+            )
+        return httpx.Response(200, json={"code": 0, "data": {"datas": []}})
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    client = JstClient(_settings(tmp_path), http=http)
+    try:
+        assert client.inventory(sku_ids="SKU001")["code"] == 0
+    finally:
+        http.close()
+
+    assert business_tokens == ["stale-access", "fresh-access"]
+
+
+def test_inventory_reinitializes_when_refresh_token_is_rejected(
+    tmp_path: Path,
+) -> None:
+    business_tokens: list[str] = []
+    init_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal init_calls
+        form = {key: values[0] for key, values in parse_qs(request.content.decode()).items()}
+        if request.url.path == "/openWeb/auth/getInitToken":
+            init_calls += 1
+            suffix = "stale" if init_calls == 1 else "fresh"
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "access_token": f"{suffix}-access",
+                        "refresh_token": f"{suffix}-refresh",
+                        "expires_in": 2592000,
+                    },
+                },
+            )
+        if request.url.path == "/openWeb/auth/refreshToken":
+            assert form["refresh_token"] == "stale-refresh"
+            return httpx.Response(
+                200,
+                json={"code": 140, "msg": "refresh_token invalid or expired"},
+            )
+
+        assert request.url.path == "/open/inventory/query"
+        business_tokens.append(form["access_token"])
+        if form["access_token"] == "stale-access":
+            return httpx.Response(
+                200,
+                json={"code": 100, "msg": "access_token invalid or expired"},
+            )
+        return httpx.Response(200, json={"code": 0, "data": {"datas": []}})
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    client = JstClient(_settings(tmp_path), http=http)
+    try:
+        assert client.inventory(sku_ids="SKU001")["code"] == 0
+    finally:
+        http.close()
+
+    assert business_tokens == ["stale-access", "fresh-access"]
+
+
+def test_inventory_reinitializes_when_timed_refresh_is_rejected(
+    tmp_path: Path,
+) -> None:
+    token_path = tmp_path / "token.json"
+    token_path.write_text(
+        json.dumps(
+            {
+                "app_key": "test-app",
+                "access_token": "expired-access",
+                "refresh_token": "stale-refresh",
+                "access_expires_at": time.time() - 1,
+                "refresh_expires_at": time.time() + 3600,
+            }
+        ),
+        encoding="utf-8",
+    )
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        if request.url.path == "/openWeb/auth/refreshToken":
+            return httpx.Response(
+                200,
+                json={"code": 140, "msg": "refresh_token invalid or expired"},
+            )
+        if request.url.path == "/openWeb/auth/getInitToken":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "access_token": "fresh-access",
+                        "refresh_token": "fresh-refresh",
+                        "expires_in": 2592000,
+                    },
+                },
+            )
+
+        form = {key: values[0] for key, values in parse_qs(request.content.decode()).items()}
+        assert request.url.path == "/open/inventory/query"
+        assert form["access_token"] == "fresh-access"
+        return httpx.Response(200, json={"code": 0, "data": {"datas": []}})
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    client = JstClient(_settings(tmp_path), http=http)
+    try:
+        assert client.inventory(sku_ids="SKU001")["code"] == 0
+    finally:
+        http.close()
+
+    assert requests == [
+        "/openWeb/auth/refreshToken",
+        "/openWeb/auth/getInitToken",
         "/open/inventory/query",
     ]
 
