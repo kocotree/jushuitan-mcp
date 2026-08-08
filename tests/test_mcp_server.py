@@ -2,6 +2,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -10,7 +11,7 @@ import httpx
 import uvicorn
 from starlette.testclient import TestClient
 
-from jst_connector import mcp_server
+from jst_connector import mcp_server, oauth as oauth_module
 from jst_connector.oauth import OAuthSettings
 
 
@@ -108,7 +109,10 @@ def test_oauth_client_can_register_and_is_advertised(tmp_path: Path) -> None:
     assert registered["redirect_uris"] == ["http://127.0.0.1:33418/callback"]
 
 
-def test_feishu_login_issues_mcp_token_for_allowed_tenant(tmp_path: Path) -> None:
+def test_feishu_login_issues_mcp_token_for_30_day_session(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     verifier = "a" * 43
     challenge = base64.urlsafe_b64encode(
         hashlib.sha256(verifier.encode()).digest()
@@ -179,6 +183,7 @@ def test_feishu_login_issues_mcp_token_for_allowed_tenant(tmp_path: Path) -> Non
             },
         )
         token_payload = token_response.json()
+        session_started_at = int(time.time())
         mcp_response = client.post(
             "/mcp",
             json={
@@ -215,6 +220,39 @@ def test_feishu_login_issues_mcp_token_for_allowed_tenant(tmp_path: Path) -> Non
                 "scope": "jushuitan:read",
             },
         )
+        with monkeypatch.context() as clock:
+            clock.setattr(
+                oauth_module.time,
+                "time",
+                lambda: session_started_at + 12 * 60 * 60 + 1,
+            )
+            twelve_hour_refresh_response = client.post(
+                "/token",
+                data={
+                    "grant_type": "refresh_token",
+                    "client_id": registered["client_id"],
+                    "refresh_token": refresh_response.json()["refresh_token"],
+                    "scope": "jushuitan:read",
+                },
+            )
+            assert twelve_hour_refresh_response.status_code == 200
+
+            clock.setattr(
+                oauth_module.time,
+                "time",
+                lambda: session_started_at + 30 * 24 * 60 * 60 + 1,
+            )
+            expired_session_response = client.post(
+                "/token",
+                data={
+                    "grant_type": "refresh_token",
+                    "client_id": registered["client_id"],
+                    "refresh_token": twelve_hour_refresh_response.json()[
+                        "refresh_token"
+                    ],
+                    "scope": "jushuitan:read",
+                },
+            )
 
     assert authorize_response.status_code in {302, 303, 307}
     assert urlparse(feishu_location).netloc == "accounts.feishu.cn"
@@ -223,11 +261,13 @@ def test_feishu_login_issues_mcp_token_for_allowed_tenant(tmp_path: Path) -> Non
     assert token_response.status_code == 200
     assert token_payload["access_token"] != "feishu-user-token"
     assert token_payload["token_type"] == "Bearer"
+    assert token_payload["expires_in"] == 60 * 60
     assert token_payload["refresh_token"]
     assert mcp_response.status_code == 200
     assert refresh_response.status_code == 200
     assert refresh_response.json()["refresh_token"] != token_payload["refresh_token"]
     assert reused_refresh_response.status_code == 400
+    assert expired_session_response.status_code == 400
     database_bytes = (tmp_path / "oauth.db").read_bytes()
     assert token_payload["access_token"].encode() not in database_bytes
     assert token_payload["refresh_token"].encode() not in database_bytes
