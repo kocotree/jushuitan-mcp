@@ -39,6 +39,7 @@ AUTHORIZATION_CODE_TTL_SECONDS = 5 * 60
 ACCESS_TOKEN_TTL_SECONDS = 60 * 60
 REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60
 SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
+REFRESH_TOKEN_REUSE_GRACE_SECONDS = 60
 
 
 @dataclass(frozen=True)
@@ -165,10 +166,19 @@ class FeishuOAuthProvider:
                     resource TEXT,
                     subject TEXT NOT NULL,
                     expires_at INTEGER NOT NULL,
-                    session_expires_at INTEGER NOT NULL
+                    session_expires_at INTEGER NOT NULL,
+                    rotated_at INTEGER
                 );
                 """
             )
+            token_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(oauth_tokens)")
+            }
+            if "rotated_at" not in token_columns:
+                connection.execute(
+                    "ALTER TABLE oauth_tokens ADD COLUMN rotated_at INTEGER"
+                )
         if os.name != "nt":
             self.settings.database_path.chmod(0o600)
 
@@ -425,25 +435,42 @@ class FeishuOAuthProvider:
         refresh_token: RefreshToken,
         scopes: list[str],
     ) -> OAuthToken:
+        now = int(time.time())
+        token_hash = self._hash_token(refresh_token.token)
         with self._connect() as connection:
             row = connection.execute(
                 """
-                SELECT resource, session_expires_at
+                SELECT client_id, resource, expires_at, session_expires_at, rotated_at
                 FROM oauth_tokens
-                WHERE token_hash = ?
+                WHERE token_hash = ? AND token_type = 'refresh'
                 """,
-                (self._hash_token(refresh_token.token),),
+                (token_hash,),
             ).fetchone()
-            deleted = connection.execute(
-                "DELETE FROM oauth_tokens WHERE token_hash = ? AND token_type = 'refresh'",
-                (self._hash_token(refresh_token.token),),
-            ).rowcount
-        if (
-            row is None
-            or deleted != 1
-            or row["session_expires_at"] <= int(time.time())
-        ):
-            raise TokenError("invalid_grant", "Refresh token was already used")
+            if (
+                row is None
+                or row["client_id"] != client.client_id
+                or row["expires_at"] <= now
+                or row["session_expires_at"] <= now
+            ):
+                raise TokenError("invalid_grant", "Refresh token is invalid or expired")
+
+            rotated_at = row["rotated_at"]
+            if rotated_at is None:
+                connection.execute(
+                    """
+                    UPDATE oauth_tokens
+                    SET rotated_at = ?, expires_at = MIN(expires_at, ?)
+                    WHERE token_hash = ? AND token_type = 'refresh'
+                    """,
+                    (
+                        now,
+                        now + REFRESH_TOKEN_REUSE_GRACE_SECONDS,
+                        token_hash,
+                    ),
+                )
+            elif rotated_at + REFRESH_TOKEN_REUSE_GRACE_SECONDS <= now:
+                raise TokenError("invalid_grant", "Refresh token reuse window expired")
+
         return self._issue_token_pair(
             client.client_id,
             scopes,

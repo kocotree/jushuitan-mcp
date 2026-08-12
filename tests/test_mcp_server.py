@@ -2,6 +2,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import sqlite3
 import time
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,58 @@ def _oauth_settings(tmp_path: Path) -> OAuthSettings:
         allowed_tenant_key="tenant-test",
         database_path=tmp_path / "oauth.db",
     )
+
+
+def test_oauth_database_adds_refresh_rotation_column_without_data_loss(
+    tmp_path: Path,
+) -> None:
+    settings = _oauth_settings(tmp_path)
+    with sqlite3.connect(settings.database_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE oauth_tokens (
+                token_hash TEXT PRIMARY KEY,
+                token_type TEXT NOT NULL,
+                client_id TEXT NOT NULL,
+                scopes TEXT NOT NULL,
+                resource TEXT,
+                subject TEXT NOT NULL,
+                expires_at INTEGER NOT NULL,
+                session_expires_at INTEGER NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO oauth_tokens (
+                token_hash, token_type, client_id, scopes, resource,
+                subject, expires_at, session_expires_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "existing-token-hash",
+                "refresh",
+                "existing-client",
+                '["jushuitan:read"]',
+                settings.resource_url,
+                "existing-subject",
+                int(time.time()) + 3600,
+                int(time.time()) + 3600,
+            ),
+        )
+
+    oauth_module.FeishuOAuthProvider(settings)
+
+    with sqlite3.connect(settings.database_path) as connection:
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(oauth_tokens)")
+        }
+        token_count = connection.execute(
+            "SELECT COUNT(*) FROM oauth_tokens"
+        ).fetchone()[0]
+
+    assert "rotated_at" in columns
+    assert token_count == 1
 
 
 def test_mcp_exposes_only_read_only_tools() -> None:
@@ -224,6 +277,25 @@ def test_feishu_login_issues_mcp_token_for_30_day_session(
             clock.setattr(
                 oauth_module.time,
                 "time",
+                lambda: (
+                    session_started_at
+                    + oauth_module.REFRESH_TOKEN_REUSE_GRACE_SECONDS
+                    + 1
+                ),
+            )
+            expired_reuse_response = client.post(
+                "/token",
+                data={
+                    "grant_type": "refresh_token",
+                    "client_id": registered["client_id"],
+                    "refresh_token": token_payload["refresh_token"],
+                    "scope": "jushuitan:read",
+                },
+            )
+
+            clock.setattr(
+                oauth_module.time,
+                "time",
                 lambda: session_started_at + 12 * 60 * 60 + 1,
             )
             twelve_hour_refresh_response = client.post(
@@ -266,7 +338,9 @@ def test_feishu_login_issues_mcp_token_for_30_day_session(
     assert mcp_response.status_code == 200
     assert refresh_response.status_code == 200
     assert refresh_response.json()["refresh_token"] != token_payload["refresh_token"]
-    assert reused_refresh_response.status_code == 400
+    assert reused_refresh_response.status_code == 200
+    assert reused_refresh_response.json()["refresh_token"]
+    assert expired_reuse_response.status_code == 400
     assert expired_session_response.status_code == 400
     database_bytes = (tmp_path / "oauth.db").read_bytes()
     assert token_payload["access_token"].encode() not in database_bytes
