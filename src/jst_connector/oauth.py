@@ -39,7 +39,6 @@ AUTHORIZATION_CODE_TTL_SECONDS = 5 * 60
 ACCESS_TOKEN_TTL_SECONDS = 60 * 60
 REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60
 SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
-REFRESH_TOKEN_REUSE_GRACE_SECONDS = 60
 
 
 @dataclass(frozen=True)
@@ -418,14 +417,25 @@ class FeishuOAuthProvider:
         client: OAuthClientInformationFull,
         refresh_token: str,
     ) -> RefreshToken | None:
-        row = self._load_token(refresh_token, "refresh")
-        if row is None or row["client_id"] != client.client_id:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM oauth_tokens
+                WHERE token_hash = ? AND token_type = 'refresh'
+                """,
+                (self._hash_token(refresh_token),),
+            ).fetchone()
+        if (
+            row is None
+            or row["client_id"] != client.client_id
+            or row["session_expires_at"] <= int(time.time())
+        ):
             return None
         return RefreshToken(
             token=refresh_token,
             client_id=row["client_id"],
             scopes=json.loads(row["scopes"]),
-            expires_at=row["expires_at"],
+            expires_at=row["session_expires_at"],
             subject=row["subject"],
         )
 
@@ -440,7 +450,7 @@ class FeishuOAuthProvider:
         with self._connect() as connection:
             row = connection.execute(
                 """
-                SELECT client_id, resource, expires_at, session_expires_at, rotated_at
+                SELECT client_id, resource, session_expires_at
                 FROM oauth_tokens
                 WHERE token_hash = ? AND token_type = 'refresh'
                 """,
@@ -449,33 +459,16 @@ class FeishuOAuthProvider:
             if (
                 row is None
                 or row["client_id"] != client.client_id
-                or row["expires_at"] <= now
                 or row["session_expires_at"] <= now
             ):
                 raise TokenError("invalid_grant", "Refresh token is invalid or expired")
 
-            rotated_at = row["rotated_at"]
-            if rotated_at is None:
-                connection.execute(
-                    """
-                    UPDATE oauth_tokens
-                    SET rotated_at = ?, expires_at = MIN(expires_at, ?)
-                    WHERE token_hash = ? AND token_type = 'refresh'
-                    """,
-                    (
-                        now,
-                        now + REFRESH_TOKEN_REUSE_GRACE_SECONDS,
-                        token_hash,
-                    ),
-                )
-            elif rotated_at + REFRESH_TOKEN_REUSE_GRACE_SECONDS <= now:
-                raise TokenError("invalid_grant", "Refresh token reuse window expired")
-
-        return self._issue_token_pair(
+        return self._issue_access_token(
             client.client_id,
             scopes,
             row["resource"] or self.settings.resource_url,
             refresh_token.subject or "",
+            refresh_token.token,
             session_expires_at=row["session_expires_at"],
         )
 
@@ -549,6 +542,46 @@ class FeishuOAuthProvider:
                         refresh_expires_at,
                         session_expires_at,
                     ),
+                ),
+            )
+        return OAuthToken(
+            access_token=access_token,
+            token_type="Bearer",
+            expires_in=access_expires_at - now,
+            scope=" ".join(scopes),
+            refresh_token=refresh_token,
+        )
+
+    def _issue_access_token(
+        self,
+        client_id: str,
+        scopes: list[str],
+        resource: str,
+        subject: str,
+        refresh_token: str,
+        *,
+        session_expires_at: int,
+    ) -> OAuthToken:
+        access_token = self._new_token()
+        now = int(time.time())
+        access_expires_at = min(now + ACCESS_TOKEN_TTL_SECONDS, session_expires_at)
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO oauth_tokens (
+                    token_hash, token_type, client_id, scopes, resource,
+                    subject, expires_at, session_expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    self._hash_token(access_token),
+                    "access",
+                    client_id,
+                    json.dumps(scopes),
+                    resource,
+                    subject,
+                    access_expires_at,
+                    session_expires_at,
                 ),
             )
         return OAuthToken(

@@ -162,7 +162,7 @@ def test_oauth_client_can_register_and_is_advertised(tmp_path: Path) -> None:
     assert registered["redirect_uris"] == ["http://127.0.0.1:33418/callback"]
 
 
-def test_feishu_login_issues_mcp_token_for_30_day_session(
+def test_feishu_login_keeps_refresh_token_reusable_for_30_day_session(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -273,17 +273,28 @@ def test_feishu_login_issues_mcp_token_for_30_day_session(
                 "scope": "jushuitan:read",
             },
         )
+        with sqlite3.connect(tmp_path / "oauth.db") as connection:
+            connection.execute(
+                """
+                UPDATE oauth_tokens
+                SET expires_at = ?, rotated_at = ?
+                WHERE token_hash = ? AND token_type = 'refresh'
+                """,
+                (
+                    session_started_at + 60,
+                    session_started_at,
+                    hashlib.sha256(
+                        token_payload["refresh_token"].encode()
+                    ).hexdigest(),
+                ),
+            )
         with monkeypatch.context() as clock:
             clock.setattr(
                 oauth_module.time,
                 "time",
-                lambda: (
-                    session_started_at
-                    + oauth_module.REFRESH_TOKEN_REUSE_GRACE_SECONDS
-                    + 1
-                ),
+                lambda: session_started_at + 12 * 60 * 60 + 1,
             )
-            expired_reuse_response = client.post(
+            delayed_reuse_response = client.post(
                 "/token",
                 data={
                     "grant_type": "refresh_token",
@@ -296,22 +307,6 @@ def test_feishu_login_issues_mcp_token_for_30_day_session(
             clock.setattr(
                 oauth_module.time,
                 "time",
-                lambda: session_started_at + 12 * 60 * 60 + 1,
-            )
-            twelve_hour_refresh_response = client.post(
-                "/token",
-                data={
-                    "grant_type": "refresh_token",
-                    "client_id": registered["client_id"],
-                    "refresh_token": refresh_response.json()["refresh_token"],
-                    "scope": "jushuitan:read",
-                },
-            )
-            assert twelve_hour_refresh_response.status_code == 200
-
-            clock.setattr(
-                oauth_module.time,
-                "time",
                 lambda: session_started_at + 30 * 24 * 60 * 60 + 1,
             )
             expired_session_response = client.post(
@@ -319,12 +314,14 @@ def test_feishu_login_issues_mcp_token_for_30_day_session(
                 data={
                     "grant_type": "refresh_token",
                     "client_id": registered["client_id"],
-                    "refresh_token": twelve_hour_refresh_response.json()[
-                        "refresh_token"
-                    ],
+                    "refresh_token": token_payload["refresh_token"],
                     "scope": "jushuitan:read",
                 },
             )
+        with sqlite3.connect(tmp_path / "oauth.db") as connection:
+            refresh_token_count = connection.execute(
+                "SELECT COUNT(*) FROM oauth_tokens WHERE token_type = 'refresh'"
+            ).fetchone()[0]
 
     assert authorize_response.status_code in {302, 303, 307}
     assert urlparse(feishu_location).netloc == "accounts.feishu.cn"
@@ -337,11 +334,17 @@ def test_feishu_login_issues_mcp_token_for_30_day_session(
     assert token_payload["refresh_token"]
     assert mcp_response.status_code == 200
     assert refresh_response.status_code == 200
-    assert refresh_response.json()["refresh_token"] != token_payload["refresh_token"]
+    assert refresh_response.json()["refresh_token"] == token_payload["refresh_token"]
     assert reused_refresh_response.status_code == 200
-    assert reused_refresh_response.json()["refresh_token"]
-    assert expired_reuse_response.status_code == 400
+    assert reused_refresh_response.json()["refresh_token"] == token_payload[
+        "refresh_token"
+    ]
+    assert delayed_reuse_response.status_code == 200
+    assert delayed_reuse_response.json()["refresh_token"] == token_payload[
+        "refresh_token"
+    ]
     assert expired_session_response.status_code == 400
+    assert refresh_token_count == 1
     database_bytes = (tmp_path / "oauth.db").read_bytes()
     assert token_payload["access_token"].encode() not in database_bytes
     assert token_payload["refresh_token"].encode() not in database_bytes

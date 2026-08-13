@@ -135,7 +135,7 @@ FEISHU_REDIRECT_URI=https://jushuitan-mcp.kktree.cn/oauth/feishu/callback
 
 `FEISHU_ALLOWED_TENANT_KEY` 是公司的租户标识，不是部门 ID。部门限制继续由飞书应用的“可用范围”负责；服务端会额外拒绝 tenant_key 不匹配的其他企业账号。OAuth 客户端、授权码和 MCP token 保存在 SQLite 中，其中授权码和 token 只保存哈希值。
 
-单次 MCP access token 有效 1 小时；refresh token 可以轮换，同一登录会话最多持续 30 天，之后必须重新完成飞书登录，以便应用可用范围的人员变更定期生效。为兼容客户端并发刷新，旧 refresh token 在轮换后保留 60 秒复用宽限期，超过宽限期后失效。
+单次 MCP access token 有效 1 小时；同一登录会话最多持续 30 天，之后必须重新完成飞书登录，以便应用可用范围的人员变更定期生效。同一会话的 refresh token 在 30 天内可重复使用，避免多个 Codex 任务并行或间隔运行时互相挤掉授权。
 
 ## 4. 手动 Docker 部署
 
